@@ -1,3 +1,6 @@
+```I'm temporarily without a DGX Spark, I cannot test how this build works in the latest ComfyUI releases. I will hopefully have one in my hands soon again, and will then be able to bring it up to date.
+```
+
 # 🚀 ComfyUI on DGX Spark (Blackwell GB10)
 
 A Docker Compose setup for running [ComfyUI](https://github.com/comfyanonymous/ComfyUI) on the **NVIDIA DGX Spark** (Grace-Blackwell GB10), with a mobile-friendly UI included.
