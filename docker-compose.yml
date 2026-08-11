@@ -1,16 +1,44 @@
 services:
+  # ONNX Runtime GPU wheel, compiled from source for sm_121 (~45-60 min).
+  # Not in the default profile: it is built on demand, and the wheel image it
+  # produces is then consumed by the comfyui build below.
+  #
+  #   docker compose build onnxruntime
+  #
+  # Rebuild only when ONNXRUNTIME_REF or the CUDA base changes. The image holds
+  # nothing but the wheel and is never started.
+  onnxruntime:
+    profiles: [ "onnxruntime" ]
+    build:
+      context: .
+      dockerfile: Dockerfile.onnxruntime
+      args:
+        ONNXRUNTIME_REF: "${ONNXRUNTIME_REF:-v1.28.0}"
+        # Lower this if nvcc runs out of memory during the build
+        ONNXRUNTIME_JOBS: "${ONNXRUNTIME_JOBS:-8}"
+
+    image: "${ONNXRUNTIME_IMAGE:-onnxruntime-gb10:1.28.0-cu131-sm121}"
+
   comfyui:
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        # Pin ComfyUI to a known-good commit/tag if desired
-        COMFYUI_REF: "${COMFYUI_REF:-master}"
-        # SageAttention ref (e.g., "main", "v2.2.0", or specific commit)
-        SAGEATTN_REF: "${SAGEATTN_REF:-main}"
+        # Pinned refs, not branches — see .env.example on bumping them.
+        COMFYUI_REF: "${COMFYUI_REF:-v0.31.0}"
+        SAGEATTN_REF: "${SAGEATTN_REF:-d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5}"
+        # Wheel image built by the onnxruntime service above — must already exist
+        ONNXRUNTIME_IMAGE: "${ONNXRUNTIME_IMAGE:-onnxruntime-gb10:1.28.0-cu131-sm121}"
+        # Baked into the image so files it writes are owned by you, not root.
+        # Changing these requires a rebuild, not just a restart.
+        PUID: "${PUID:-1000}"
+        PGID: "${PGID:-1000}"
 
     image: comfyui:cu130
     container_name: comfyui
+
+    # Must match the PUID/PGID the image was built with.
+    user: "${PUID:-1000}:${PGID:-1000}"
 
     # GPU enablement
     deploy:
@@ -25,27 +53,52 @@ services:
     ports:
       - "${COMFYUI_PORT:-8188}:8188"
 
+    # Large tensor transfers need more than docker's 64MB default.
+    shm_size: "16gb"
+
     environment:
       COMFYUI_PORT: "${COMFYUI_PORT:-8188}"
-      # Optimized for Grace-Blackwell unified memory architecture
-      # Key insight: check .env.example for explanation regarding each flag
-      COMFYUI_FLAGS: "${COMFYUI_FLAGS:---listen 0.0.0.0 --port 8188 --disable-pinned-memory --use-sage-attention --force-fp16 --bf16-unet --bf16-vae --bf16-text-enc --dont-upcast-attention --disable-mmap}"
+      # Grace-Blackwell flags. See .env.example for why each one is here — and
+      # for the list of flags that were removed and must not come back.
+      COMFYUI_FLAGS: "${COMFYUI_FLAGS:---listen 0.0.0.0 --port 8188 --preview-method auto --disable-pinned-memory --use-sage-attention --bf16-unet --bf16-vae --bf16-text-enc}"
       NVIDIA_VISIBLE_DEVICES: "all"
       NVIDIA_DRIVER_CAPABILITIES: "compute,utility"
 
-      # Disable torch.compile/inductor - Triton doesn't support Blackwell sm_121a yet
-      TORCH_COMPILE_DISABLE: "1"
-      TORCHDYNAMO_DISABLE: "1"
+      # torch.compile/inductor is NOT hard-disabled here any more. Triton failed
+      # on GB10 because PyTorch's bundled ptxas is too old to know sm_121a, not
+      # because Blackwell is unsupported; the Dockerfile points TRITON_PTXAS_PATH
+      # at the CUDA 13.1 ptxas instead, and entrypoint.sh compiles a real Triton
+      # kernel at startup and enables torch.compile only if it actually runs.
+      #
+      # Empty (the default) means "probe and decide". Set TORCH_COMPILE_DISABLE=1
+      # in .env to skip the probe and pin the old always-off behaviour.
+      TORCH_COMPILE_DISABLE: "${TORCH_COMPILE_DISABLE:-}"
 
-      # Grace-Blackwell unified memory optimizations
-      CUDA_CACHE_DISABLE: "1"
-      PYTORCH_NO_CUDA_MEMORY_CACHING: "1"
-      CUDA_DEVICE_MAX_CONNECTIONS: "1"
-      CUDA_DEVICE_MAX_COPY_CONNECTIONS: "4"
+      # Compile caches, all pointed into the mounted /opt/cache volume below.
+      # Their defaults (/tmp/torchinductor_*, ~/.nv/ComputeCache) live inside the
+      # container and are thrown away on every recreate, which would mean paying
+      # the full TorchInductor compile cost again after each `up --force-recreate`.
+      TORCHINDUCTOR_CACHE_DIR: "/opt/cache/inductor"
+      TRITON_CACHE_DIR: "/opt/cache/triton"
+      CUDA_CACHE_PATH: "/opt/cache/nv"
+      # Only meaningful now that CUDA_CACHE_PATH points somewhere persistent.
+      CUDA_CACHE_MAXSIZE: "4294967296"
+
       CUDA_MODULE_LOADING: "LAZY" # EAGER works as well, however LAZY loads models in memory a lot faster
-      CUDA_MANAGED_FORCE_DEVICE_ALLOC: "1"
-      OMP_NUM_THREADS: "20"
-      CUBLAS_WORKSPACE_CONFIG: ":0:0"
+      NCCL_P2P_DISABLE: "1"
+      # NOT "HF_TOKENIZERS_PARALLELISM" — huggingface/tokenizers reads this exact
+      # name, and the HF_-prefixed spelling that used to be here was read by
+      # nothing at all.
+      TOKENIZERS_PARALLELISM: "false"
+
+      # DO NOT re-add the "unified memory optimization" env vars that used to
+      # live here. PYTORCH_NO_CUDA_MEMORY_CACHING=1 disables PyTorch's caching
+      # allocator, which turns every tensor alloc into a cudaMalloc and every
+      # free into a device-wide-synchronizing cudaFree — thousands of times per
+      # sampler step. That alone makes sampling look permanently stuck.
+      # CUDA_DEVICE_MAX_CONNECTIONS=1 (single work queue, no stream overlap),
+      # CUDA_MANAGED_FORCE_DEVICE_ALLOC=1 (fights the GB10 migration engine) and
+      # CUBLAS_WORKSPACE_CONFIG (caps cuBLAS workspace) compound it.
 
     volumes:
       # --- PERSISTENT STORAGE (Read/Write) ---
@@ -67,6 +120,16 @@ services:
       # 5. Wheel Vault (Optional)
       - ${COMFYUI_DATA_PATH}/wheels:/opt/wheels:rw
 
+      # 6. Compile caches (TorchInductor / Triton / CUDA JIT). Keeping these
+      #    outside the container is what makes torch.compile pay off across
+      #    restarts instead of recompiling from scratch every time.
+      - ${COMFYUI_DATA_PATH}/cache:/opt/cache:rw
+
+      # 7. Container HOME. Nodes that build their own environments write here —
+      #    comfy-env/pixi puts the comfyui-sam3 environment in $HOME/.ce — and
+      #    without this it is rebuilt on every recreate.
+      - ${COMFYUI_DATA_PATH}/home:/home/comfy:rw
+
     networks:
       - comfy_net
 
@@ -82,48 +145,48 @@ services:
 
   # ComfyUIMini - Mobile-friendly UI
   # Access at http://<host>:3000
-  comfyuimini:
-    build:
-      context: ./comfyuimini
-      dockerfile: Dockerfile
-      args:
-        COMFYUIMINI_REF: "${COMFYUIMINI_REF:-main}"
+  # comfyuimini:
+  #   build:
+  #     context: ./comfyuimini
+  #     dockerfile: Dockerfile
+  #     args:
+  #       COMFYUIMINI_REF: "${COMFYUIMINI_REF:-main}"
 
-    image: comfyuimini:latest
-    container_name: comfyuimini
+  #   image: comfyuimini:latest
+  #   container_name: comfyuimini
 
-    ports:
-      - "${COMFYUIMINI_PORT:-3000}:3000"
+  #   ports:
+  #     - "${COMFYUIMINI_PORT:-3000}:3000"
 
-    environment:
-      # node-config override - connects to comfyui container via docker network
-      NODE_CONFIG: >-
-        {
-          "app_port": 3000,
-          "comfyui_url": "http://comfyui:8188",
-          "comfyui_ws_url": "ws://comfyui:8188",
-          "output_dir": "/shared/output",
-          "reject_unauthorised_cert": false
-        }
+  #   environment:
+  #     # node-config override - connects to comfyui container via docker network
+  #     NODE_CONFIG: >-
+  #       {
+  #         "app_port": 3000,
+  #         "comfyui_url": "http://comfyui:8188",
+  #         "comfyui_ws_url": "ws://comfyui:8188",
+  #         "output_dir": "/shared/output",
+  #         "reject_unauthorised_cert": false
+  #       }
 
-    volumes:
-      # Share output directory with ComfyUI for gallery feature (read-only)
-      - ${COMFYUI_DATA_PATH}/output:/shared/output:ro
-      # Persist server-side workflows
-      - comfyuimini_workflows:/app/workflows
+  #   volumes:
+  #     # Share output directory with ComfyUI for gallery feature (read-only)
+  #     - ${COMFYUI_DATA_PATH}/output:/shared/output:ro
+  #     # Persist server-side workflows
+  #     - comfyuimini_workflows:/app/workflows
 
-    networks:
-      - comfy_net
+  #   networks:
+  #     - comfy_net
 
-    depends_on:
-      comfyui:
-        condition: service_healthy
+  #   depends_on:
+  #     comfyui:
+  #       condition: service_healthy
 
-    restart: unless-stopped
+  #   restart: unless-stopped
 
 networks:
   comfy_net:
     driver: bridge
 
-volumes:
-  comfyuimini_workflows:
+# volumes:
+#   comfyuimini_workflows:
