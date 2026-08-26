@@ -25,7 +25,7 @@ services:
       dockerfile: Dockerfile
       args:
         # Pinned refs, not branches — see .env.example on bumping them.
-        COMFYUI_REF: "${COMFYUI_REF:-v0.31.0}"
+        COMFYUI_REF: "${COMFYUI_REF:-v0.34.0}"
         SAGEATTN_REF: "${SAGEATTN_REF:-d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5}"
         # Wheel image built by the onnxruntime service above — must already exist
         ONNXRUNTIME_IMAGE: "${ONNXRUNTIME_IMAGE:-onnxruntime-gb10:1.28.0-cu131-sm121}"

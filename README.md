@@ -250,7 +250,7 @@ It also comments out every `onnxruntime` / `onnxruntime-gpu` line in custom node
 **pinned tag/commit**, not a branch:
 
 ```env
-COMFYUI_REF=v0.31.0
+COMFYUI_REF=v0.34.0
 SAGEATTN_REF=d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5
 ```
 
