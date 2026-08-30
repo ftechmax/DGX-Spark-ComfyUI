@@ -125,6 +125,15 @@ ComfyUI source. `.env.example` carries the full reasoning; the short version:
 | `--dont-upcast-attention` | Makes `get_attn_precision()` return `None`, **overriding** the fp32 attention some models explicitly request. Linux already defaults to no upcasting, so it can only remove a safety net (black images) |
 | `--disable-mmap` | Only existed to pair with a `comfy/utils.py` patch that has since been removed. `safe_open()` had already placed the tensor on the target device, so the patch was a no-op and the two cancelled out |
 
+### Patched upstream bugs
+
+The image applies one source patch to ComfyUI itself, in the `Dockerfile` right after the
+checkout:
+
+| File | What | Why |
+|---|---|---|
+| `comfy_extras/nodes_mesh_postprocess.py` | `voxel_colors.detach().cpu().numpy().astype(np.float32)` → `voxel_colors.detach().float().cpu().numpy()` | Under `--bf16-vae` the voxel field is BF16, and `BakeTextureFromVoxel` dies with `TypeError: Got unsupported ScalarType BFloat16`. The cast to fp32 lands on the NumPy side, one step *after* the conversion that cannot accept BF16 in the first place; `.float()` moves it back across to torch |
+
 ### Environment variables
 
 | Variable | Purpose |
@@ -270,10 +279,16 @@ quietly produce a different image, and a broken SageAttention compile is only di
 runtime. Neither step swallows failure any more: a ref that doesn't resolve, or
 a SageAttention build that fails, fails the build.
 
+Bumping `COMFYUI_REF` also has to survive the source patch under
+[Patched upstream bugs](#patched-upstream-bugs). If the new ref has renamed or fixed the line
+it rewrites, the build stops there — drop the patch step if upstream fixed it, or re-target it
+if the code just moved. It deliberately does not fail silently.
+
 A running container reports what it was built from — `entrypoint.sh` prints `/opt/image-id`:
 
 ```
 [entrypoint] Image:  comfyui=43cb4fff...
+[entrypoint] Image:  patch_bf16_numpy=yes
 [entrypoint] Image:  sageattention=d1a57a54...
 [entrypoint] Image:  torch=2.13.0+cu130
 ```

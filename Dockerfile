@@ -88,6 +88,30 @@ RUN pip install --index-url https://download.pytorch.org/whl/cu130 \
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git /opt/ComfyUI && \
     git -C /opt/ComfyUI -c advice.detachedHead=false checkout ${COMFYUI_REF}
 
+# ---- Patch: BF16 tensors crossing the torch -> NumPy boundary ----
+# Under --bf16-vae the voxel field is bf16, and BakeTextureFromVoxel dies with
+#
+#   TypeError: Got unsupported ScalarType BFloat16
+#
+# in comfy_extras/nodes_mesh_postprocess.py. The offending line converts the
+# colours as `.cpu().numpy().astype(np.float32)` — the cast to fp32 happens on
+# the NumPy side, one step too late. torch cannot hand a bf16 tensor to NumPy at
+# all, so .numpy() raises before .astype() is ever reached. Casting with
+# .float() first crosses the boundary as fp32 and the astype becomes redundant.
+#
+# Not something a COMFYUI_REF bump fixes: the same line is still in upstream
+# master. The other way out is --fp32-vae, which gives up the bf16 VAE for the
+# whole stack to route around one conversion — see .env.example for why not.
+#
+# The greps around the sed are the point. A sed that quietly matches nothing
+# would ship an unpatched image and the crash would come back at bake time; this
+# way a ref that renames or fixes the line fails the build here instead.
+RUN set -eux; \
+    f=/opt/ComfyUI/comfy_extras/nodes_mesh_postprocess.py; \
+    grep -q 'color_np = voxel_colors.detach().cpu().numpy().astype(np.float32)' "$f"; \
+    sed -i 's/voxel_colors\.detach()\.cpu()\.numpy()\.astype(np\.float32)/voxel_colors.detach().float().cpu().numpy()/' "$f"; \
+    grep -q 'color_np = voxel_colors.detach().float().cpu().numpy()' "$f"
+
 RUN pip install -r /opt/ComfyUI/requirements.txt
 
 # ---- ONNX Runtime GPU ----
@@ -176,6 +200,7 @@ RUN python -c "import importlib.metadata as m; print(f'sageattention=={m.version
 # stable marker to hash so custom node deps are reinstalled after a rebuild.
 RUN { echo "comfyui=$(git -C /opt/ComfyUI rev-parse HEAD)"; \
       echo "comfyui_ref=${COMFYUI_REF}"; \
+      echo "patch_bf16_numpy=$(grep -q 'voxel_colors.detach().float().cpu().numpy()' /opt/ComfyUI/comfy_extras/nodes_mesh_postprocess.py && echo yes || echo no)"; \
       echo "sageattention=${SAGEATTN_REF}"; \
       echo "torch=$(python -c 'import torch; print(torch.__version__)')"; \
       date -u +build=%Y-%m-%dT%H:%M:%SZ; } > /opt/image-id
