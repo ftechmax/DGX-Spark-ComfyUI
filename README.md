@@ -128,11 +128,20 @@ ComfyUI source. `.env.example` carries the full reasoning; the short version:
 ### Patched upstream bugs
 
 The image applies one source patch to ComfyUI itself, in the `Dockerfile` right after the
-checkout:
+checkout. It covers two files, because they carry the same upstream bug —
+`.cpu().numpy().astype(np.float32)` puts the cast to fp32 on the NumPy side, one step *after*
+the conversion that cannot accept BF16 in the first place, so `.numpy()` raises
+`TypeError: Got unsupported ScalarType BFloat16` before `.astype()` is ever reached.
+`.float()` moves the cast back across to torch, which makes the `.astype()` redundant:
 
 | File | What | Why |
 |---|---|---|
-| `comfy_extras/nodes_mesh_postprocess.py` | `voxel_colors.detach().cpu().numpy().astype(np.float32)` → `voxel_colors.detach().float().cpu().numpy()` | Under `--bf16-vae` the voxel field is BF16, and `BakeTextureFromVoxel` dies with `TypeError: Got unsupported ScalarType BFloat16`. The cast to fp32 lands on the NumPy side, one step *after* the conversion that cannot accept BF16 in the first place; `.float()` moves it back across to torch |
+| `comfy_extras/nodes_mesh_postprocess.py` | `voxel_colors.detach().cpu().numpy().astype(np.float32)` → `voxel_colors.detach().float().cpu().numpy()` | Under `--bf16-vae` the voxel field is BF16, and `BakeTextureFromVoxel` dies on it |
+| `comfy_extras/nodes_save_3d.py` | the same rewrite for all five float attributes in `save_glb()` (vertices, uvs, vertex colors, normals, tangents), plus `.clamp(0.0, 1.0).cpu().numpy()` → `.clamp(0.0, 1.0).float().cpu().numpy()` in `mesh_item_to_glb_bytes()`'s `_img` helper | `MeshToFile3D` and `SaveGLB` die the same way once a BF16 attribute reaches the exporter — vertex colors out of `PaintMesh` are the first one most workflows produce, and the `_img` maps come straight out of the BF16 VAE. All six take whatever dtype the graph hands them, so which one crashes is a property of the workflow, not the code; they are patched together rather than one rebuild at a time. `faces` is left alone — it converts `.astype(np.int64)`, which BF16 never reaches |
+
+Neither is fixed by a `COMFYUI_REF` bump: both lines are still in upstream master. The other
+way out is `--fp32-vae`, which gives up the BF16 VAE for the whole stack to route around a
+handful of conversions — see `.env.example` for why not.
 
 ### Environment variables
 
@@ -280,9 +289,11 @@ runtime. Neither step swallows failure any more: a ref that doesn't resolve, or
 a SageAttention build that fails, fails the build.
 
 Bumping `COMFYUI_REF` also has to survive the source patch under
-[Patched upstream bugs](#patched-upstream-bugs). If the new ref has renamed or fixed the line
-it rewrites, the build stops there — drop the patch step if upstream fixed it, or re-target it
-if the code just moved. It deliberately does not fail silently.
+[Patched upstream bugs](#patched-upstream-bugs). It is wrapped in greps that assert the
+unpatched lines exist going in and are gone coming out — the `nodes_save_3d.py` half counts
+them, so a ref that fixes or renames even one of its six sites stops the build rather than
+shipping a half-patched exporter. Drop the step if upstream fixed it, or re-target it if the
+code just moved. It deliberately does not fail silently.
 
 A running container reports what it was built from — `entrypoint.sh` prints `/opt/image-id`:
 
