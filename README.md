@@ -212,15 +212,15 @@ docker compose build onnxruntime
 
 | Setting | Value |
 |---|---|
-| `ONNXRUNTIME_REF` | `v1.28.0` — builds against CUDA 13.1 on GB10 and runs with the CUDA EP active |
+| `ONNXRUNTIME_REF` (in `Dockerfile.onnxruntime`) | `v1.28.0` — builds against CUDA 13.1 on GB10 and runs with the CUDA EP active |
 | `CMAKE_CUDA_ARCHITECTURES` | `121` — **not** 120. A binary built for sm_120 has no matching cubin for GB10 |
 | cuDNN | `libcudnn9-dev-cuda-13` + `libcudnn9-headers-cuda-13` at build time, `libcudnn9-cuda-13` in the final image. The headers are a *separate* package, and both land in Debian multiarch paths, so the builder symlinks them into `/usr/include` and `/usr/lib` for `--cudnn_home /usr` |
 | `ONNXRUNTIME_JOBS` | `8` — nvcc peaks at several GB per translation unit; more jobs can OOM the build |
-| `ONNXRUNTIME_IMAGE` | `onnxruntime-gb10:1.28.0-cu131-sm121` — the tag both halves agree on |
+| `x-onnxruntime-image` (in `docker-compose.yml`) | `onnxruntime-gb10:1.28.0-cu131-sm121` — the tag both halves agree on |
 
 That build produces a `scratch` image containing nothing but the wheel (the ~10 GB build tree is discarded), which the main Dockerfile consumes with a single `COPY --from`. The compile is **~45–60 minutes** and is paid exactly once: a normal `docker compose build` never touches it, no matter what you change or how aggressively you prune the build cache.
 
-Rebuild the wheel image only when `ONNXRUNTIME_REF` or the CUDA base image changes — bump `ONNXRUNTIME_IMAGE` in `.env` at the same time so the two never drift out of sync.
+Rebuild the wheel image only when `ONNXRUNTIME_REF` (in `Dockerfile.onnxruntime`) or the CUDA base image changes — bump the `x-onnxruntime-image` anchor at the top of `docker-compose.yml` at the same time. That tag is anchored precisely because two places must agree on it: the `onnxruntime` service publishes it, and the `comfyui` build consumes it as a `FROM`.
 
 > If `docker compose build` fails on the very first instruction with `pull access denied` or `manifest unknown` for `onnxruntime-gb10:...`, the wheel image simply hasn't been built yet — run the command above. (The tag is local-only and never published, so Docker's attempt to fetch it from a registry is expected to fail.) This resolution needs the default `docker` buildx driver, which reads the local image store; a `docker-container` driver cannot see local tags.
 
@@ -246,17 +246,28 @@ It also comments out every `onnxruntime` / `onnxruntime-gpu` line in custom node
 
 ## 🔄 Updating ComfyUI
 
-`COMFYUI_REF` and `SAGEATTN_REF` control what the image is built from. Both default to a
-**pinned tag/commit**, not a branch:
+`COMFYUI_REF` and `SAGEATTN_REF` control what the image is built from. They are **hardcoded
+in the `Dockerfile`**, at the single place they are used:
 
-```env
-COMFYUI_REF=v0.34.0
-SAGEATTN_REF=d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5
+```dockerfile
+ARG COMFYUI_REF=v0.34.0
+ARG SAGEATTN_REF=d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5
 ```
 
-Bump them deliberately and rebuild. Tracking `master`/`main` means an identical `docker compose
-build` can quietly produce a different image, and a broken SageAttention compile is only
-discoverable at runtime. Neither step swallows failure any more: a ref that doesn't resolve, or
+Edit those lines and rebuild. There is deliberately no `.env` override and no compose
+passthrough: what the image is built from is a property of the code, not of the machine, so it
+belongs in git. (An override did exist, and its only real effect was that an untracked value in
+`.env` silently beat the committed pin — the upgrade looked applied while the rebuild
+faithfully reproduced the old version.) The ONNX Runtime ref lives the same way in
+`Dockerfile.onnxruntime`, and its wheel-image tag in the `x-onnxruntime-image` anchor at the
+top of `docker-compose.yml`, which is anchored because two places must agree on it.
+
+To confirm what you actually got, read `/opt/image-id` (below) rather than trusting the file
+you edited.
+
+Pin rather than track a branch: `master`/`main` means an identical `docker compose build` can
+quietly produce a different image, and a broken SageAttention compile is only discoverable at
+runtime. Neither step swallows failure any more: a ref that doesn't resolve, or
 a SageAttention build that fails, fails the build.
 
 A running container reports what it was built from — `entrypoint.sh` prints `/opt/image-id`:

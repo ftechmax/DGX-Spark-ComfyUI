@@ -5,30 +5,33 @@ services:
   #
   #   docker compose build onnxruntime
   #
-  # Rebuild only when ONNXRUNTIME_REF or the CUDA base changes. The image holds
-  # nothing but the wheel and is never started.
+  # The ref it builds is hardcoded in Dockerfile.onnxruntime; rebuild only when
+  # that or the CUDA base changes. The image holds nothing but the wheel and is
+  # never started.
   onnxruntime:
     profiles: [ "onnxruntime" ]
     build:
       context: .
       dockerfile: Dockerfile.onnxruntime
       args:
-        ONNXRUNTIME_REF: "${ONNXRUNTIME_REF:-v1.28.0}"
-        # Lower this if nvcc runs out of memory during the build
+        # Host-specific, so it stays overridable: lower it if nvcc runs out of
+        # memory during the build.
         ONNXRUNTIME_JOBS: "${ONNXRUNTIME_JOBS:-8}"
 
-    image: "${ONNXRUNTIME_IMAGE:-onnxruntime-gb10:1.28.0-cu131-sm121}"
+    image: *onnxruntime_image
 
   comfyui:
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        # Pinned refs, not branches — see .env.example on bumping them.
-        COMFYUI_REF: "${COMFYUI_REF:-v0.34.0}"
-        SAGEATTN_REF: "${SAGEATTN_REF:-d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5}"
+        # COMFYUI_REF and SAGEATTN_REF are deliberately NOT passed through here.
+        # They are hardcoded in the Dockerfile, which is the one place they are
+        # used — a passthrough would only add an untracked .env override that
+        # silently beats the committed pin.
+        #
         # Wheel image built by the onnxruntime service above — must already exist
-        ONNXRUNTIME_IMAGE: "${ONNXRUNTIME_IMAGE:-onnxruntime-gb10:1.28.0-cu131-sm121}"
+        ONNXRUNTIME_IMAGE: *onnxruntime_image
         # Baked into the image so files it writes are owned by you, not root.
         # Changing these requires a rebuild, not just a restart.
         PUID: "${PUID:-1000}"
