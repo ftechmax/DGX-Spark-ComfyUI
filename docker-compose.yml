@@ -1,3 +1,5 @@
+x-onnxruntime-image: &onnxruntime_image "onnxruntime-gb10:1.28.0-cu131-sm121"
+
 services:
   # ONNX Runtime GPU wheel, compiled from source for sm_121 (~45-60 min).
   # Not in the default profile: it is built on demand, and the wheel image it
