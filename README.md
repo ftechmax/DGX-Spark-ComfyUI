@@ -1,6 +1,6 @@
 # 🚀 ComfyUI on DGX Spark (Blackwell GB10)
 
-A Docker Compose setup for running [ComfyUI](https://github.com/comfyanonymous/ComfyUI) on the **NVIDIA DGX Spark** (Grace-Blackwell GB10), with a mobile-friendly UI included.
+A Docker Compose setup for running [ComfyUI](https://github.com/comfyanonymous/ComfyUI) on the **NVIDIA DGX Spark** (Grace-Blackwell GB10).
 
 Built specifically to handle the quirks of the **sm_121 / compute 12.1** architecture and its **unified CPU-GPU memory fabric**.
 
@@ -19,8 +19,7 @@ Built specifically to handle the quirks of the **sm_121 / compute 12.1** archite
 - **Pinned dependencies** — ABI-critical packages are constrained at build time, so a custom node can't silently downgrade torch, numpy or triton
 - **Runs as your user** — no more root-owned files appearing in your mounted `output/` and `custom_nodes/`
 - **ComfyUI-Manager** — auto-installed at container startup into the mounted `custom_nodes` volume
-- **ComfyUIMini** — lightweight mobile/tablet UI proxying to the ComfyUI backend (optional second service, **commented out** in `docker-compose.yml` by default)
-- **Health checks** — the ComfyUI service exposes a health check endpoint, which also gates `depends_on` ordering if you enable ComfyUIMini
+- **Health checks** — the ComfyUI service exposes a health check endpoint
 - **Persistent volumes** — models, custom nodes, outputs, inputs, user settings, and workflows are all mounted from the host
 
 ---
@@ -31,11 +30,9 @@ Built specifically to handle the quirks of the **sm_121 / compute 12.1** archite
 .
 ├── Dockerfile            # Main ComfyUI image (CUDA 13.1, PyTorch, SageAttention, Comfy Kitchen)
 ├── Dockerfile.onnxruntime # ONNX Runtime GPU wheel for sm_121 — built separately, once
-├── docker-compose.yml    # Orchestrates comfyui + comfyuimini services
+├── docker-compose.yml    # Orchestrates the comfyui service (and the build-once onnxruntime image)
 ├── entrypoint.sh         # Runtime startup: installs ComfyUI-Manager, custom node deps, launches ComfyUI
-├── .env.example          # Example environment file — copy to .env and customize
-└── comfyuimini/
-    └── Dockerfile        # Lightweight Node.js image for ComfyUIMini mobile UI
+└── .env.example          # Example environment file — copy to .env and customize
 ```
 
 ---
@@ -88,10 +85,6 @@ docker compose up --build -d
 ```
 
 ComfyUI will be available at **`http://<host-ip>:8188`**.
-
-ComfyUIMini is **commented out** in `docker-compose.yml`. Uncomment the service (and the
-`comfyuimini_workflows` volume at the bottom of the file) if you want it; it then comes up at
-`http://<host-ip>:3000` once ComfyUI passes its health check.
 
 ---
 
@@ -201,14 +194,6 @@ If you are switching an existing install away from root, take ownership of the d
 ```bash
 sudo chown -R "$(id -u):$(id -g)" /path/to/your/comfyui
 ```
-
----
-
-## 📱 ComfyUIMini (Mobile UI)
-
-[ComfyUIMini](https://github.com/ImDarkTom/ComfyUIMini) is a lightweight, mobile-friendly interface that proxies requests to the ComfyUI backend over the internal Docker network.
-
-It is **commented out** in `docker-compose.yml`. Uncomment the `comfyuimini` service and the `comfyuimini_workflows` volume to enable it; it then starts after ComfyUI passes its health check, serves on port 3000, and shares the `output` directory for gallery access.
 
 ---
 
