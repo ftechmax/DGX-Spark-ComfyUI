@@ -309,6 +309,36 @@ retries instead of making the gap permanent.
 
 ---
 
+## 🩺 Troubleshooting
+
+### `CUDA error: operation not permitted` after a host upgrade
+
+After an `apt upgrade` and reboot of the Spark (seen going from kernel 6.17 to 7.0, driver
+580.173.02 unchanged), the first GPU op in a workflow can fail with
+`torch.AcceleratorError: CUDA error: operation not permitted`. Every run after that fails with
+`CUDA error: unknown error`. The GPU still looks fine: `nvidia-smi` works, ComfyUI starts, and
+models load.
+
+The container that `restart: unless-stopped` brings back after the reboot keeps its old
+writable layer, and with it the venv full of custom node packages installed before the upgrade.
+Recreate it:
+
+```bash
+docker compose up -d --force-recreate comfyui
+```
+
+That gives it a fresh venv, and the entrypoint reinstalls the custom node requirements (see
+[Custom node dependencies](#custom-node-dependencies)). No rebuild and no flag changes are needed.
+
+Some things point the wrong way here. A plain `torch` matmul or SDPA test inside the broken
+container passes. The container also loads the image's forward-compat
+`/usr/local/cuda-13.1/compat/libcuda.so` instead of the host driver's, which looks suspicious
+but isn't the cause. And adding `--disable-dynamic-vram` seems to fix it only because applying
+the flag means recreating the container. The crash is reported from inside dynamic VRAM
+loading, but the fresh container works with it enabled.
+
+---
+
 ## 📄 License
 
 MIT
