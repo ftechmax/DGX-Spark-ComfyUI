@@ -19,7 +19,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 # Pinned refs, not moving branches: a rebuild must reproduce the same image.
 # Bump these deliberately (and rebuild) rather than tracking a branch — a broken
 # SageAttention build is only discoverable at runtime.
-ARG COMFYUI_REF=v0.34.0
+ARG COMFYUI_REF=v0.35.1
 ARG SAGEATTN_REF=d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5
 # Host uid/gid the container runs as, so bind-mounted files are not root-owned.
 ARG PUID=1000

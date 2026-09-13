@@ -253,7 +253,7 @@ It also comments out every `onnxruntime` / `onnxruntime-gpu` line in custom node
 in the `Dockerfile`**, at the single place they are used:
 
 ```dockerfile
-ARG COMFYUI_REF=v0.34.0
+ARG COMFYUI_REF=v0.35.1
 ARG SAGEATTN_REF=d1a57a546c3d395b1ffcbeecc66d81db76f3b4b5
 ```
 
